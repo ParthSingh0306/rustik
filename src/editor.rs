@@ -1,4 +1,7 @@
-use std::io::{stdout, Write};
+use std::{
+    io::{stdout, Write},
+    usize,
+};
 
 use crossterm::{
     cursor,
@@ -8,6 +11,7 @@ use crossterm::{
 };
 
 use crate::buffer::Buffer;
+use crate::log;
 
 enum Action {
     Quit,
@@ -33,6 +37,8 @@ pub struct Editor {
     buffer: Buffer,
     stdout: std::io::Stdout,
     size: (u16, u16),
+    vtop: u16,
+    vleft: u16,
     cx: u16,
     cy: u16,
     mode: Mode,
@@ -58,6 +64,8 @@ impl Editor {
         Ok(Editor {
             buffer,
             stdout,
+            vtop: 0,
+            vleft: 0,
             cx: 0,
             cy: 0,
             mode: Mode::Normal,
@@ -65,26 +73,53 @@ impl Editor {
         })
     }
 
+    fn vheight(&self) -> u16 {
+        self.size.1 - 2
+    }
+
+    fn vwidth(&self) -> u16 {
+        self.size.0
+    }
+
+    fn line_length(&self) -> u16 {
+        if let Some(line) = self.viewport_line(self.cy) {
+            return line.len() as u16;
+        }
+        0
+    }
+
+    fn viewport_line(&self, n: u16) -> Option<String> {
+        let buffer_line = self.vtop + n;
+        self.buffer.get(buffer_line as usize)
+    }
+
+    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
+        let vwidth = self.vwidth() as usize;
+        for i in 0..self.vheight() {
+            let line = match self.viewport_line(i) {
+                None => String::new(), // clear the line!
+                Some(s) => s,          // String
+            };
+
+            self.stdout
+                .queue(cursor::MoveTo(0, i))?
+                .queue(style::Print(format!("{line:<width$}", width = vwidth)))?;
+        }
+
+        Ok(())
+    }
+
     pub fn draw(&mut self) -> anyhow::Result<()> {
-        self.draw_buffer()?;
+        self.draw_viewport()?;
         self.draw_statusline()?;
         self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
-    pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
-        for (i, line) in self.buffer.lines.iter().enumerate() {
-            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
-            self.stdout.queue(style::Print(line))?;
-        }
-
-        Ok(())
-    }
-
     pub fn draw_statusline(&mut self) -> anyhow::Result<()> {
         let mode = format!(" {:?} ", self.mode).to_uppercase();
-        let file = " src/main.rs";
+        let file = format!(" {}", self.buffer.file.as_deref().unwrap_or("No Name"));
         let pos = format!(" {}:{} ", self.cx, self.cy);
 
         let file_width = self.size.0 - mode.len() as u16 - pos.len() as u16 - 2;
@@ -157,8 +192,28 @@ impl Editor {
         Ok(())
     }
 
+    fn check_bounds(&mut self) {
+        let line_length = self.line_length();
+        if self.cx >= line_length {
+            if line_length > 0 {
+                self.cx = self.line_length() - 1;
+            } else {
+                self.cx = 0;
+            }
+        }
+        if self.cx >= self.vwidth() {
+            self.cx = self.vwidth() - 1;
+        }
+
+        let line_on_buffer = self.cy + self.vtop;
+        if line_on_buffer as usize > self.buffer.len() - 1 {
+            self.cy = self.buffer.len() as u16 - self.vtop - 1;
+        }
+    }
+
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
+            self.check_bounds();
             self.draw()?;
 
             if let Event::Key(event) = read()? {
@@ -167,13 +222,26 @@ impl Editor {
                         match action {
                             Action::Quit => break,
                             Action::MoveUp => {
-                                self.cy = self.cy.saturating_sub(1);
+                                if self.cy == 0 {
+                                    if self.vtop > 0 {
+                                        self.vtop -= 1;
+                                    }
+                                } else {
+                                    self.cy = self.cy.saturating_sub(1);
+                                }
                             }
                             Action::MoveDown => {
                                 self.cy += 1u16;
+                                if self.cy >= self.vheight() {
+                                    self.vtop += 1;
+                                    self.cy -= 1;
+                                }
                             }
                             Action::MoveLeft => {
                                 self.cx = self.cx.saturating_sub(1);
+                                if self.cx < self.vleft {
+                                    self.cx = self.vleft;
+                                }
                             }
                             Action::MoveRight => {
                                 self.cx += 1u16;
