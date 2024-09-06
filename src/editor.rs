@@ -5,7 +5,7 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{self, read, Event, KeyEventKind},
+    event::{self, read, Event, KeyEventKind, KeyModifiers},
     style::{self, Color, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
@@ -20,6 +20,8 @@ enum Action {
     MoveDown,
     MoveLeft,
     MoveRight,
+    PageUp,
+    PageDown,
 
     AddChar(char),
     NewLine,
@@ -246,6 +248,16 @@ impl Editor {
                             Action::MoveRight => {
                                 self.cx += 1u16;
                             }
+                            Action::PageUp => {
+                                if self.vtop > 0 {
+                                    self.vtop = self.vtop.saturating_sub(self.vheight());
+                                }
+                            }
+                            Action::PageDown => {
+                                if self.buffer.len() > (self.vtop + self.vheight()) as usize {
+                                    self.vtop += self.vheight();
+                                }
+                            }
                             Action::EnterMode(new_mode) => {
                                 self.mode = new_mode;
                             }
@@ -276,16 +288,37 @@ impl Editor {
     }
 
     fn handle_normal_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
+        log!("Event : {:?}", ev);
         let action = match ev {
-            event::Event::Key(event) => match event.code {
-                event::KeyCode::Char('q') => Some(Action::Quit),
-                event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
-                event::KeyCode::Down | event::KeyCode::Char('j') => Some(Action::MoveDown),
-                event::KeyCode::Up | event::KeyCode::Char('k') => Some(Action::MoveUp),
-                event::KeyCode::Right | event::KeyCode::Char('l') => Some(Action::MoveRight),
-                event::KeyCode::Char('i') => Some(Action::EnterMode(Mode::Insert)),
-                _ => None,
-            },
+            event::Event::Key(event) => {
+                let code = event.code;
+                let modifiers = event.modifiers;
+                match code {
+                    event::KeyCode::Char('q') => Some(Action::Quit),
+                    event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
+                    event::KeyCode::Down | event::KeyCode::Char('j') => Some(Action::MoveDown),
+                    event::KeyCode::Up | event::KeyCode::Char('k') => Some(Action::MoveUp),
+                    event::KeyCode::Right | event::KeyCode::Char('l') => Some(Action::MoveRight),
+                    event::KeyCode::Char('i') => Some(Action::EnterMode(Mode::Insert)),
+                    event::KeyCode::Char('b') => {
+                        if matches!(modifiers, KeyModifiers::CONTROL) {
+                            log!("ctrl + b Pressed");
+                            Some(Action::PageUp)
+                        } else {
+                            None
+                        }
+                    }
+                    event::KeyCode::Char('f') => {
+                        if matches!(modifiers, KeyModifiers::CONTROL) {
+                            log!("ctrl + F Pressed");
+                            Some(Action::PageDown)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         };
 
