@@ -111,7 +111,10 @@ impl Editor {
     fn set_cursor_style(&mut self) -> anyhow::Result<()> {
         self.stdout.queue(match self.waiting_command {
             Some(_) => cursor::SetCursorStyle::SteadyUnderScore,
-            _ => cursor::SetCursorStyle::DefaultUserShape,
+            _ => match self.mode {
+                Mode::Normal => cursor::SetCursorStyle::DefaultUserShape,
+                Mode::Insert => cursor::SetCursorStyle::SteadyBar,
+            },
         })?;
 
         Ok(())
@@ -134,10 +137,12 @@ impl Editor {
     }
 
     pub fn draw(&mut self) -> anyhow::Result<()> {
+        self.stdout.queue(cursor::Hide)?;
         self.set_cursor_style()?;
         self.draw_viewport()?;
         self.draw_statusline()?;
         self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
+        self.stdout.queue(cursor::Show)?;
         self.stdout.flush()?;
         Ok(())
     }
