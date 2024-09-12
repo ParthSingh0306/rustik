@@ -16,7 +16,7 @@ static LOGGER: OnceCell<Logger> = OnceCell::new();
 macro_rules! log {
     ($( $arg:tt )*) => {
         let log_message = format!($( $arg )*);
-        $crate::LOGGER.get_or_init(|| $crate::Logger::new("rustika.log")).log(&log_message);
+        $crate::LOGGER.get_or_init(|| $crate::Logger::new("rustik.log")).log(&log_message);
     };
 }
 
@@ -34,8 +34,6 @@ fn main() -> anyhow::Result<()> {
     }));
 
     let _ = editor.run();
-
-
-
+    editor.cleanup()?;
     Ok(())
 }

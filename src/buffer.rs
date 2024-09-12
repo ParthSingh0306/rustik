@@ -34,6 +34,10 @@ impl Buffer {
         }
     }
 
+    pub fn insert_line(&mut self, line: usize, content: String) {
+        self.lines.insert(line, content);
+    }
+
     pub fn remove(&mut self, x: u16, y: usize) {
         if let Some(line) = self.lines.get_mut(y as usize) {
             (*line).remove(x as usize);
