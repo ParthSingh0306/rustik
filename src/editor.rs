@@ -99,8 +99,8 @@ impl Editor {
         0
     }
 
-    fn buffer_line(&self) -> u16 {
-        self.vtop + self.cy
+    fn buffer_line(&self) -> usize {
+        (self.vtop + self.cy) as usize
     }
 
     fn viewport_line(&self, n: u16) -> Option<String> {
