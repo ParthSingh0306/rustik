@@ -1,6 +1,6 @@
 use std::{
     io::{stdout, Write},
-    usize,
+    mem, usize,
 };
 
 use crossterm::{
@@ -30,6 +30,7 @@ enum Action {
     InsertCharAtCursorPos(char),
     DeleteCharAtCursorPos,
     DeleteCurrentLine,
+    DeleteLineAt(usize),
 
     NewLine,
 
@@ -37,6 +38,12 @@ enum Action {
     SetWaitingCmd(char),
     InsertLineAt(usize, Option<String>),
     MoveLineToViewportCenter,
+    InsertLineAtCursor,
+    InsertLineBelowCursor,
+    MoveToBottom,
+    MoveToTop,
+    RemoveCharAt(u16, usize),
+    UndoMultiple(Vec<Action>),
 }
 
 impl Action {
@@ -85,11 +92,26 @@ impl Action {
                 }
             }
             Action::EnterMode(new_mode) => {
+                if !editor.is_insert() && matches!(new_mode, Mode::Insert) {
+                    editor.insert_undo_actions = Vec::new();
+                }
+                if editor.is_insert() && matches!(new_mode, Mode::Normal) {
+                    if !editor.insert_undo_actions.is_empty() {
+                        let actions = mem::take(&mut editor.insert_undo_actions);
+                        editor.undo_action.push(Action::UndoMultiple(actions));
+                    }
+                }
                 editor.mode = *new_mode;
             }
             Action::InsertCharAtCursorPos(c) => {
+                editor
+                    .insert_undo_actions
+                    .push(Action::RemoveCharAt(editor.cx, editor.buffer_line()));
                 editor.buffer.insert(editor.cx, editor.buffer_line(), *c);
                 editor.cx += 1;
+            }
+            Action::RemoveCharAt(cx, line) => {
+                editor.buffer.remove(*cx, *line);
             }
             Action::DeleteCharAtCursorPos => {
                 if editor.line_length() > 0 {
@@ -126,7 +148,6 @@ impl Action {
                 let viewport_center = editor.vheight() / 2;
                 let distance_to_center = editor.cy as isize - viewport_center as isize;
 
-                log!("Distance to center: {}", distance_to_center);
                 if distance_to_center > 0 {
                     // if distance_to_center is negative, we need to move the scroll up
                     let distance_to_center = distance_to_center.abs() as usize;
@@ -145,6 +166,47 @@ impl Action {
                         editor.cy = viewport_center;
                     }
                 }
+            }
+            Action::InsertLineAtCursor => {
+                editor
+                    .undo_action
+                    .push(Action::DeleteLineAt(editor.buffer_line()));
+                editor
+                    .buffer
+                    .insert_line(editor.buffer_line(), String::new());
+                editor.mode = Mode::Insert;
+                editor.cx = 0;
+            }
+            Action::InsertLineBelowCursor => {
+                editor
+                    .undo_action
+                    .push(Action::DeleteLineAt(editor.buffer_line() + 1));
+                editor
+                    .buffer
+                    .insert_line(editor.buffer_line() + 1, String::new());
+                editor.cy += 1;
+                editor.cx = 0;
+                editor.mode = Mode::Insert;
+            }
+            Action::MoveToTop => {
+                editor.vtop = 0;
+                editor.cy = 0;
+            }
+            Action::MoveToBottom => {
+                if editor.buffer.len() > editor.vheight() as usize {
+                    editor.vtop = editor.buffer.len() - editor.vheight() as usize;
+                    editor.cy = editor.vheight() - 1;
+                } else {
+                    editor.cy = editor.buffer.len() as u16 - 1u16;
+                }
+            }
+            Action::UndoMultiple(actions) => {
+                for action in actions.iter().rev() {
+                    action.execute(editor);
+                }
+            }
+            Action::DeleteLineAt(y) => {
+                editor.buffer.remove_line(*y);
             }
         }
     }
@@ -167,6 +229,7 @@ pub struct Editor {
     mode: Mode,
     waiting_command: Option<char>,
     undo_action: Vec<Action>,
+    insert_undo_actions: Vec<Action>,
 }
 
 impl Drop for Editor {
@@ -197,6 +260,7 @@ impl Editor {
             size: terminal::size()?,
             waiting_command: None,
             undo_action: vec![],
+            insert_undo_actions: vec![],
         })
     }
 
@@ -338,12 +402,16 @@ impl Editor {
         Ok(())
     }
 
+    fn is_insert(&self) -> bool {
+        matches!(self.mode, Mode::Insert)
+    }
+
     fn check_bounds(&mut self) {
         let line_length = self.line_length();
-        if self.cx >= line_length {
+        if self.cx >= line_length && !self.is_insert() {
             if line_length > 0 {
                 self.cx = self.line_length() - 1;
-            } else {
+            } else if !self.is_insert() {
                 self.cx = 0;
             }
         }
@@ -397,6 +465,10 @@ impl Editor {
                 let code = event.code;
                 let modifiers = event.modifiers;
                 match code {
+                    event::KeyCode::Char('G') => Some(Action::MoveToBottom),
+                    event::KeyCode::Char('g') => Some(Action::SetWaitingCmd('g')),
+                    event::KeyCode::Char('O') => Some(Action::InsertLineAtCursor),
+                    event::KeyCode::Char('o') => Some(Action::InsertLineBelowCursor),
                     event::KeyCode::Char('u') => Some(Action::Undo),
                     event::KeyCode::Char('q') => Some(Action::Quit),
                     event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
@@ -452,6 +524,13 @@ impl Editor {
             'z' => match ev {
                 event::Event::Key(event) => match event.code {
                     event::KeyCode::Char('z') => Some(Action::MoveLineToViewportCenter),
+                    _ => None,
+                },
+                _ => None,
+            },
+            'g' => match ev {
+                event::Event::Key(event) => match event.code {
+                    event::KeyCode::Char('g') => Some(Action::MoveToTop),
                     _ => None,
                 },
                 _ => None,
