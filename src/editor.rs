@@ -9,9 +9,10 @@ use crossterm::{
     style::{self, Color, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
+use tree_sitter::{Parser, Query, QueryCursor};
+use tree_sitter_rust::HIGHLIGHT_QUERY;
 
-use crate::buffer::Buffer;
-use crate::log;
+use crate::{buffer::Buffer, log};
 
 enum Action {
     Undo,
@@ -218,6 +219,12 @@ enum Mode {
     Insert,
 }
 
+pub struct ColorInfo {
+    start: usize,
+    end: usize,
+    color: Color,
+}
+
 pub struct Editor {
     buffer: Buffer,
     stdout: std::io::Stdout,
@@ -300,17 +307,107 @@ impl Editor {
         Ok(())
     }
 
-    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
-        let vwidth = self.vwidth() as usize;
-        for i in 0..self.vheight() {
-            let line = match self.viewport_line(i) {
-                None => String::new(), // clear the line!
-                Some(s) => s,          // String
-            };
+    pub fn highlight(&self, code: &str) -> anyhow::Result<Vec<ColorInfo>> {
+        let mut parser = Parser::new();
+        let language = tree_sitter_rust::language();
+        parser.set_language(language)?;
 
+        let tree = parser.parse(&code, None).expect("parse works");
+        let query = Query::new(language, HIGHLIGHT_QUERY)?;
+        let mut colors = Vec::new();
+        let mut cursor = QueryCursor::new();
+        let matches = cursor.matches(&query, tree.root_node(), code.as_bytes());
+
+        for mat in matches {
+            for cap in mat.captures {
+                let node = cap.node;
+                let start = node.start_byte();
+                let end = node.end_byte();
+                let color = match query.capture_names()[cap.index as usize].as_str() {
+                    "function" => Some(Color::Blue),
+                    "string" => Some(Color::Green),
+                    _ => None,
+                };
+                if let Some(color) = color {
+                    colors.push(ColorInfo { start, end, color });
+                }
+            }
+        }
+
+        Ok(colors)
+    }
+
+    fn print_char(
+        &mut self,
+        x: u16,
+        y: u16,
+        c: char,
+        color: Option<&ColorInfo>,
+    ) -> anyhow::Result<()> {
+        self.stdout.queue(cursor::MoveTo(x, y))?;
+
+        match color {
+            Some(ci) => {
+                self.stdout
+                    .queue(style::PrintStyledContent(c.to_string().with(ci.color)))?;
+            }
+            None => {
+                self.stdout.queue(style::Print(c.to_string()))?;
+            }
+        };
+
+        Ok(())
+    }
+
+    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
+        let vbuffer = self.buffer.viewport(self.vtop, self.vheight() as usize);
+        let color_info = self.highlight(&vbuffer)?;
+        let vheight = self.vheight();
+        let vwidth = self.vwidth();
+
+        let mut x = 0;
+        let mut y = 0;
+        let mut color = None;
+        let mut iter = vbuffer.chars().enumerate().peekable();
+
+        while let Some((pos, c)) = iter.next() {
+            if c == '\n' || iter.peek().is_none() {
+                if c != '\n' {
+                    self.print_char(x, y, c, color)?;
+                    x += 1;
+                }
+                self.stdout
+                    .queue(style::Print(" ".repeat((vwidth - x) as usize)))?;
+                x = 0;
+                y += 1;
+                if y > vheight {
+                    break;
+                }
+                continue;
+            }
+
+            if x >= vwidth {
+                x = 0;
+                y += 1;
+            }
+
+            if let Some(col) = color_info.iter().find(|ci| ci.start == pos) {
+                color = Some(col);
+            }
+            if let Some(_) = color_info.iter().find(|ci| ci.end == pos) {
+                color = None;
+            }
+
+            self.print_char(x, y, c, color)?;
+
+            x += 1;
+        }
+
+        while y < vheight {
+            self.stdout.queue(cursor::MoveTo(0, y))?;
             self.stdout
-                .queue(cursor::MoveTo(0, i))?
-                .queue(style::Print(format!("{line:<width$}", width = vwidth)))?;
+                .queue(style::Print(" ".repeat(vwidth as usize)))?;
+            y += 1;
         }
 
         Ok(())
@@ -428,6 +525,7 @@ impl Editor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.check_bounds();
+            self.size = terminal::size()?;
             self.draw()?;
 
             if let Event::Key(event) = read()? {
@@ -453,8 +551,6 @@ impl Editor {
     }
 
     fn handle_normal_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
-        log!("Event : {:?}", ev);
-
         if let Some(cmd) = self.waiting_command {
             self.waiting_command = None;
             return self.handle_waiting_command(cmd, ev);
@@ -482,7 +578,6 @@ impl Editor {
                     event::KeyCode::Char('$') | event::KeyCode::End => Some(Action::MoveToLineEnd),
                     event::KeyCode::Char('b') => {
                         if matches!(modifiers, KeyModifiers::CONTROL) {
-                            log!("ctrl + b Pressed");
                             Some(Action::PageUp)
                         } else {
                             None
@@ -490,7 +585,6 @@ impl Editor {
                     }
                     event::KeyCode::Char('f') => {
                         if matches!(modifiers, KeyModifiers::CONTROL) {
-                            log!("ctrl + F Pressed");
                             Some(Action::PageDown)
                         } else {
                             None

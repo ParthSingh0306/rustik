@@ -4,16 +4,19 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn from_file(file: Option<String>) -> Self {
-        let lines = match &file {
-            Some(file) => {
-                let file = std::fs::read_to_string(file).unwrap();
-                file.lines().map(|s| s.to_string()).collect()
-            }
-            None => vec![],
-        };
-
+    pub fn new(file: Option<String>, contents: String) -> Self {
+        let lines = contents.lines().map(|s| s.to_string()).collect();
         Self { file, lines }
+    }
+
+    pub fn from_file(file: Option<String>) -> Self {
+        match &file {
+            Some(file) => {
+                let contents = std::fs::read_to_string(file).unwrap();
+                Self::new(Some(file.to_string()), contents.to_string())
+            }
+            None => Self::new(file, String::new()),
+        }
     }
 
     pub fn get(&self, line: usize) -> Option<String> {
@@ -48,5 +51,34 @@ impl Buffer {
         if self.len() > line {
             self.lines.remove(line);
         }
+    }
+
+    pub(crate) fn viewport(&self, vtop: usize, vheight: usize) -> String {
+        let height = std::cmp::min(vtop + vheight, self.lines.len());
+        self.lines[vtop..height].join("\n")
+    }
+}
+
+#[cfg(test)]
+
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_viewport() {
+        let buffer = Buffer::new(Some("sample.txt".to_string()), "a\nb".to_string());
+        assert_eq!(buffer.viewport(0, 5), "a\nb".to_string());
+    }
+
+    #[test]
+    fn test_viewport_with_small_buffer() {
+        let buffer = Buffer::new(
+            Some("sample.txt".to_string()),
+            "fn main() {\n    println!(\"Hello, world!\");\n    }".to_string(),
+        );
+        assert_eq!(
+            buffer.viewport(0, 2),
+            "fn main() {\n    println!(\"Hello, world!\");".to_string()
+        );
     }
 }
