@@ -9,6 +9,7 @@ use once_cell::sync::OnceCell;
 mod buffer;
 mod editor;
 mod logger;
+mod theme;
 
 static LOGGER: OnceCell<Logger> = OnceCell::new();
 
@@ -24,7 +25,8 @@ fn main() -> anyhow::Result<()> {
     let file = std::env::args().nth(1);
     let buffer = Buffer::from_file(file);
 
-    let mut editor = Editor::new(buffer)?;
+    let theme = theme::parse_vscode_theme("themes/frappe.json")?;
+    let mut editor = Editor::new(theme, buffer)?;
 
     panic::set_hook(Box::new(|info| {
         _ = stdout().execute(terminal::LeaveAlternateScreen);
