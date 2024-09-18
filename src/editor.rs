@@ -332,17 +332,29 @@ impl Editor {
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&query, tree.root_node(), code.as_bytes());
 
+        let vbuffer = self.buffer.viewport(self.vtop, self.vheight() as usize);
+
         for mat in matches {
             for cap in mat.captures {
                 let node = cap.node;
                 let start = node.start_byte();
                 let end = node.end_byte();
                 let scope = query.capture_names()[cap.index as usize].as_str();
-                log!("Scope: {:?}", scope);
                 let style = self.theme.get_style(scope);
+                let keyword = &vbuffer[start..end];
+                log!("keyword: {:?}", keyword);
 
                 if let Some(style) = style {
+                    let common_styel = style.clone();
                     colors.push(StyleInfo { start, end, style });
+                    log!("[found] {scope} = {keyword}");
+                    log!(
+                        "italic : {}, bold: {}",
+                        common_styel.italic,
+                        common_styel.bold
+                    );
+                } else {
+                    log!("[not found] {scope} = {keyword}");
                 }
             }
         }
@@ -391,8 +403,6 @@ impl Editor {
                     x += 1;
                 }
                 self.fill_line(x, y, &default_style)?;
-                self.stdout
-                    .queue(style::Print(" ".repeat((vwidth - x) as usize)))?;
                 x = 0;
                 y += 1;
                 if y > vheight {
@@ -416,9 +426,7 @@ impl Editor {
         }
 
         while y < vheight {
-            self.stdout.queue(cursor::MoveTo(0, y))?;
-            self.stdout
-                .queue(style::Print(" ".repeat(vwidth as usize)))?;
+            self.fill_line(x, y, &default_style)?;
             y += 1;
         }
 
@@ -537,7 +545,7 @@ impl Editor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.check_bounds();
-            self.size = terminal::size()?;
+            // self.size = terminal::size()?;
             self.draw()?;
 
             if let Event::Key(event) = read()? {

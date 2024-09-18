@@ -3,6 +3,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::fs;
 
+use crate::log;
+
 use super::{Style, Theme, TokenStyle};
 
 pub fn parse_vscode_theme(file: &str) -> anyhow::Result<Theme> {
@@ -75,7 +77,7 @@ impl TryFrom<VsCodeTokenColor> for TokenStyle {
                 Some(parse_rgb(bg.as_str().expect("bg is string")).expect("parsing rgb works"));
         }
 
-        if let Some(font_styles) = tc.settings.get("fontStyles") {
+        if let Some(font_styles) = tc.settings.get("fontStyle") {
             style.bold = font_styles
                 .as_str()
                 .expect("font_styles is string")
@@ -94,6 +96,17 @@ impl TryFrom<VsCodeTokenColor> for TokenStyle {
     }
 }
 
+fn translate_scope(vscode_scope: String) -> String {
+    if vscode_scope == "meta.function-call.constructor".to_string() {
+        return "constructor".to_string();
+    }
+    if vscode_scope == "meta.annotation.rust".to_string() {
+        return "attribute".to_string();
+    }
+
+    return vscode_scope;
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum VsCodeScope {
@@ -104,8 +117,8 @@ enum VsCodeScope {
 impl From<VsCodeScope> for Vec<String> {
     fn from(scope: VsCodeScope) -> Self {
         match scope {
-            VsCodeScope::Single(s) => vec![s],
-            VsCodeScope::Multiple(v) => v,
+            VsCodeScope::Single(s) => vec![translate_scope(s)],
+            VsCodeScope::Multiple(v) => v.into_iter().map(translate_scope).collect(),
         }
     }
 }
