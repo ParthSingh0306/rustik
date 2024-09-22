@@ -20,6 +20,8 @@ This project is a Vim-like modal text editor written in Rust, started as a fun p
 
 This project is currently in development, with many of the core features implemented. There are several planned features such as multi-buffer support, file picker, and extended theme options. Contributions and suggestions are welcome!
 
+[Click here to watch the demo video](https://drive.google.com/file/d/10DU_4BM3aqpp7F6TGNExJQGmkhV3hXQY/view?usp=sharing)
+
 ## Installation
 
 To get started with this project, follow these steps:
