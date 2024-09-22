@@ -38,7 +38,7 @@ To get started with this project, follow these steps:
 git clone https://github.com/ParthSingh0306/rustik.git
 cd rustik
 cargo build --release
-cargo run
+cargo run -- your_file_path
 ```
 
 ## Keybindings
