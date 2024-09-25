@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     let file = std::env::args().nth(1);
     let buffer = Buffer::from_file(file);
 
-    let theme = theme::parse_vscode_theme("themes/mocha.json")?;
+    let theme = theme::parse_vscode_theme("themes/dracula.json")?;
     let mut editor = Editor::new(theme, buffer)?;
 
     panic::set_hook(Box::new(|info| {
