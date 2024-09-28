@@ -1,12 +1,14 @@
 use std::{
-    env::Args,
+    collections::HashMap,
     io::{stdout, Write},
     mem, usize,
 };
 
+use serde::{Deserialize, Serialize};
+
 use crossterm::{
     cursor,
-    event::{self, read, Event, KeyEventKind, KeyModifiers},
+    event::{self, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     style::{self, Color, StyledContent, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
@@ -16,11 +18,14 @@ use tree_sitter_rust::HIGHLIGHT_QUERY;
 
 use crate::{
     buffer::Buffer,
-    log,
+    config::KeyAction,
     theme::{Style, Theme},
 };
 
-enum Action {
+use crate::config::Config;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Action {
     Undo,
     Quit,
 
@@ -53,174 +58,10 @@ enum Action {
     UndoMultiple(Vec<Action>),
 }
 
-impl Action {
-    fn execute(&self, editor: &mut Editor) {
-        match self {
-            Action::Quit => {}
-            Action::MoveUp => {
-                if editor.cy == 0 {
-                    if editor.vtop > 0 {
-                        editor.vtop -= 1;
-                    }
-                } else {
-                    editor.cy = editor.cy.saturating_sub(1);
-                }
-            }
-            Action::MoveDown => {
-                editor.cy += 1u16;
-                if editor.cy >= editor.vheight() {
-                    editor.vtop += 1;
-                    editor.cy -= 1;
-                }
-            }
-            Action::MoveLeft => {
-                editor.cx = editor.cx.saturating_sub(1);
-                if editor.cx < editor.vleft {
-                    editor.cx = editor.vleft;
-                }
-            }
-            Action::MoveRight => {
-                editor.cx += 1u16;
-            }
-            Action::MoveToLineStart => {
-                editor.cx = 0;
-            }
-            Action::MoveToLineEnd => {
-                editor.cx = editor.line_length().saturating_sub(1);
-            }
-            Action::PageUp => {
-                if editor.vtop > 0 {
-                    editor.vtop = editor.vtop.saturating_sub(editor.vheight() as usize);
-                }
-            }
-            Action::PageDown => {
-                if editor.buffer.len() > editor.vtop + editor.vheight() as usize {
-                    editor.vtop += editor.vheight() as usize;
-                }
-            }
-            Action::EnterMode(new_mode) => {
-                if !editor.is_insert() && matches!(new_mode, Mode::Insert) {
-                    editor.insert_undo_actions = Vec::new();
-                }
-                if editor.is_insert() && matches!(new_mode, Mode::Normal) {
-                    if !editor.insert_undo_actions.is_empty() {
-                        let actions = mem::take(&mut editor.insert_undo_actions);
-                        editor.undo_action.push(Action::UndoMultiple(actions));
-                    }
-                }
-                editor.mode = *new_mode;
-            }
-            Action::InsertCharAtCursorPos(c) => {
-                editor
-                    .insert_undo_actions
-                    .push(Action::RemoveCharAt(editor.cx, editor.buffer_line()));
-                editor.buffer.insert(editor.cx, editor.buffer_line(), *c);
-                editor.cx += 1;
-            }
-            Action::RemoveCharAt(cx, line) => {
-                editor.buffer.remove(*cx, *line);
-            }
-            Action::DeleteCharAtCursorPos => {
-                if editor.line_length() > 0 {
-                    editor.buffer.remove(editor.cx, editor.buffer_line());
-                }
-            }
-            Action::NewLine => {
-                editor.cx = 0;
-                editor.cy += 1u16;
-            }
-            Action::SetWaitingCmd(cmd) => {
-                editor.waiting_command = Some(*cmd);
-            }
-            Action::DeleteCurrentLine => {
-                let line = editor.buffer_line();
-                let contents = editor.current_line_contents();
+impl Action {}
 
-                editor.buffer.remove_line(editor.buffer_line());
-                editor
-                    .undo_action
-                    .push(Action::InsertLineAt(line, contents));
-            }
-            Action::Undo => {
-                if let Some(undo_action) = editor.undo_action.pop() {
-                    undo_action.execute(editor);
-                };
-            }
-            Action::InsertLineAt(y, contents) => {
-                if let Some(contents) = contents {
-                    editor.buffer.insert_line(*y, contents.to_string());
-                }
-            }
-            Action::MoveLineToViewportCenter => {
-                let viewport_center = editor.vheight() / 2;
-                let distance_to_center = editor.cy as isize - viewport_center as isize;
-
-                if distance_to_center > 0 {
-                    // if distance_to_center is negative, we need to move the scroll up
-                    let distance_to_center = distance_to_center.abs() as usize;
-                    if editor.vtop > distance_to_center {
-                        let new_vtop = editor.vtop + distance_to_center;
-                        editor.vtop = new_vtop;
-                        editor.cy = viewport_center;
-                    }
-                } else if distance_to_center < 0 {
-                    // if distance_to_center is negative, we need to move the scroll down
-                    let distance_to_center = distance_to_center.abs() as usize;
-                    let distance_to_go = editor.vtop + distance_to_center;
-                    let new_vtop = editor.vtop.saturating_sub(distance_to_center);
-                    if editor.buffer.len() > distance_to_go && new_vtop != editor.vtop {
-                        editor.vtop = new_vtop;
-                        editor.cy = viewport_center;
-                    }
-                }
-            }
-            Action::InsertLineAtCursor => {
-                editor
-                    .undo_action
-                    .push(Action::DeleteLineAt(editor.buffer_line()));
-                editor
-                    .buffer
-                    .insert_line(editor.buffer_line(), String::new());
-                editor.mode = Mode::Insert;
-                editor.cx = 0;
-            }
-            Action::InsertLineBelowCursor => {
-                editor
-                    .undo_action
-                    .push(Action::DeleteLineAt(editor.buffer_line() + 1));
-                editor
-                    .buffer
-                    .insert_line(editor.buffer_line() + 1, String::new());
-                editor.cy += 1;
-                editor.cx = 0;
-                editor.mode = Mode::Insert;
-            }
-            Action::MoveToTop => {
-                editor.vtop = 0;
-                editor.cy = 0;
-            }
-            Action::MoveToBottom => {
-                if editor.buffer.len() > editor.vheight() as usize {
-                    editor.vtop = editor.buffer.len() - editor.vheight() as usize;
-                    editor.cy = editor.vheight() - 1;
-                } else {
-                    editor.cy = editor.buffer.len() as u16 - 1u16;
-                }
-            }
-            Action::UndoMultiple(actions) => {
-                for action in actions.iter().rev() {
-                    action.execute(editor);
-                }
-            }
-            Action::DeleteLineAt(y) => {
-                editor.buffer.remove_line(*y);
-            }
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-enum Mode {
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Mode {
     Normal,
     Insert,
 }
@@ -239,6 +80,7 @@ impl StyleInfo {
 }
 
 pub struct Editor {
+    config: Config,
     theme: Theme,
     buffer: Buffer,
     stdout: std::io::Stdout,
@@ -263,7 +105,7 @@ impl Drop for Editor {
 }
 
 impl Editor {
-    pub fn new(theme: Theme, buffer: Buffer) -> anyhow::Result<Self> {
+    pub fn new(config: Config, theme: Theme, buffer: Buffer) -> anyhow::Result<Self> {
         let mut stdout = stdout();
 
         terminal::enable_raw_mode()?;
@@ -274,6 +116,7 @@ impl Editor {
         let vx = buffer.len().to_string().len() as u16 + 2 as u16;
 
         Ok(Editor {
+            config,
             theme,
             buffer,
             stdout,
@@ -337,7 +180,7 @@ impl Editor {
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&query, tree.root_node(), code.as_bytes());
 
-        let vbuffer = self.buffer.viewport(self.vtop, self.vheight() as usize);
+        // let vbuffer = self.buffer.viewport(self.vtop, self.vheight() as usize);
 
         for mat in matches {
             for cap in mat.captures {
@@ -346,20 +189,9 @@ impl Editor {
                 let end = node.end_byte();
                 let scope = query.capture_names()[cap.index as usize].as_str();
                 let style = self.theme.get_style(scope);
-                let keyword = &vbuffer[start..end];
-                log!("keyword: {:?}", keyword);
 
                 if let Some(style) = style {
-                    let common_styel = style.clone();
                     colors.push(StyleInfo { start, end, style });
-                    log!("[found] {scope} = {keyword}");
-                    log!(
-                        "italic : {}, bold: {}",
-                        common_styel.italic,
-                        common_styel.bold
-                    );
-                } else {
-                    log!("[not found] {scope} = {keyword}");
                 }
             }
         }
@@ -584,16 +416,32 @@ impl Editor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.check_bounds();
-            // self.size = terminal::size()?;
             self.draw()?;
 
             if let Event::Key(event) = read()? {
                 if event.kind == KeyEventKind::Press {
                     if let Some(action) = self.handle_event(Event::Key(event))? {
-                        if matches!(action, Action::Quit) {
+                        let quit = match action {
+                            KeyAction::Single(action) => self.execute(&action),
+                            KeyAction::Multiple(actions) => {
+                                let mut quit = false;
+                                for action in actions {
+                                    if self.execute(&action) {
+                                        quit = true;
+                                        break;
+                                    }
+                                }
+                                quit
+                            }
+                            KeyAction::Nested(_nested) => {
+                                // TODO: implement nested actions
+                                false
+                            }
+                        };
+
+                        if quit {
                             break;
                         }
-                        action.execute(self);
                     }
                 }
             }
@@ -602,63 +450,24 @@ impl Editor {
         Ok(())
     }
 
-    fn handle_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
+    fn handle_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
+        if let event::Event::Resize(width, height) = ev {
+            self.size = (width, height);
+            return Ok(None);
+        }
+
         match self.mode {
             Mode::Normal => self.handle_normal_event(ev),
             Mode::Insert => self.handle_insert_event(ev),
         }
     }
 
-    fn handle_normal_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
-        if let Some(cmd) = self.waiting_command {
-            self.waiting_command = None;
-            return self.handle_waiting_command(cmd, ev);
-        }
+    fn handle_insert_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
+        Ok(event_to_key_action(&self.config.keys.insert, ev)?)
+    }
 
-        let action = match ev {
-            event::Event::Key(event) => {
-                let code = event.code;
-                let modifiers = event.modifiers;
-                match code {
-                    event::KeyCode::Char('G') => Some(Action::MoveToBottom),
-                    event::KeyCode::Char('g') => Some(Action::SetWaitingCmd('g')),
-                    event::KeyCode::Char('O') => Some(Action::InsertLineAtCursor),
-                    event::KeyCode::Char('o') => Some(Action::InsertLineBelowCursor),
-                    event::KeyCode::Char('u') => Some(Action::Undo),
-                    event::KeyCode::Char('q') => Some(Action::Quit),
-                    event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
-                    event::KeyCode::Down | event::KeyCode::Char('j') => Some(Action::MoveDown),
-                    event::KeyCode::Up | event::KeyCode::Char('k') => Some(Action::MoveUp),
-                    event::KeyCode::Right | event::KeyCode::Char('l') => Some(Action::MoveRight),
-                    event::KeyCode::Char('i') => Some(Action::EnterMode(Mode::Insert)),
-                    event::KeyCode::Char('0') | event::KeyCode::Home => {
-                        Some(Action::MoveToLineStart)
-                    }
-                    event::KeyCode::Char('$') | event::KeyCode::End => Some(Action::MoveToLineEnd),
-                    event::KeyCode::Char('b') => {
-                        if matches!(modifiers, KeyModifiers::CONTROL) {
-                            Some(Action::PageUp)
-                        } else {
-                            None
-                        }
-                    }
-                    event::KeyCode::Char('f') => {
-                        if matches!(modifiers, KeyModifiers::CONTROL) {
-                            Some(Action::PageDown)
-                        } else {
-                            None
-                        }
-                    }
-                    event::KeyCode::Char('x') => Some(Action::DeleteCharAtCursorPos),
-                    event::KeyCode::Char('d') => Some(Action::SetWaitingCmd('d')),
-                    event::KeyCode::Char('z') => Some(Action::SetWaitingCmd('z')),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-
-        Ok(action)
+    fn handle_normal_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
+        Ok(event_to_key_action(&self.config.keys.normal, ev)?)
     }
 
     fn handle_waiting_command(
@@ -693,20 +502,6 @@ impl Editor {
         Ok(action)
     }
 
-    fn handle_insert_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
-        let action = match ev {
-            event::Event::Key(event) => match event.code {
-                event::KeyCode::Esc => Some(Action::EnterMode(Mode::Normal)),
-                event::KeyCode::Char(c) => Some(Action::InsertCharAtCursorPos(c)),
-                event::KeyCode::Enter => Some(Action::NewLine),
-                _ => None,
-            },
-            _ => None,
-        };
-
-        Ok(action)
-    }
-
     fn current_line_contents(&self) -> Option<String> {
         self.buffer.get(self.buffer_line())
     }
@@ -717,6 +512,192 @@ impl Editor {
         self.stdout.flush()?;
         Ok(())
     }
+
+    fn execute(&mut self, action: &Action) -> bool {
+        match action {
+            Action::Quit => return true,
+            Action::MoveUp => {
+                if self.cy == 0 {
+                    if self.vtop > 0 {
+                        self.vtop -= 1;
+                    }
+                } else {
+                    self.cy = self.cy.saturating_sub(1);
+                }
+            }
+            Action::MoveDown => {
+                self.cy += 1u16;
+                if self.cy >= self.vheight() {
+                    self.vtop += 1;
+                    self.cy -= 1;
+                }
+            }
+            Action::MoveLeft => {
+                self.cx = self.cx.saturating_sub(1);
+                if self.cx < self.vleft {
+                    self.cx = self.vleft;
+                }
+            }
+            Action::MoveRight => {
+                self.cx += 1u16;
+            }
+            Action::MoveToLineStart => {
+                self.cx = 0;
+            }
+            Action::MoveToLineEnd => {
+                self.cx = self.line_length().saturating_sub(1);
+            }
+            Action::PageUp => {
+                if self.vtop > 0 {
+                    self.vtop = self.vtop.saturating_sub(self.vheight() as usize);
+                }
+            }
+            Action::PageDown => {
+                if self.buffer.len() > self.vtop + self.vheight() as usize {
+                    self.vtop += self.vheight() as usize;
+                }
+            }
+            Action::EnterMode(new_mode) => {
+                if !self.is_insert() && matches!(new_mode, Mode::Insert) {
+                    self.insert_undo_actions = Vec::new();
+                }
+                if self.is_insert() && matches!(new_mode, Mode::Normal) {
+                    if !self.insert_undo_actions.is_empty() {
+                        let actions = mem::take(&mut self.insert_undo_actions);
+                        self.undo_action.push(Action::UndoMultiple(actions));
+                    }
+                }
+                self.mode = *new_mode;
+            }
+            Action::InsertCharAtCursorPos(c) => {
+                self.insert_undo_actions
+                    .push(Action::RemoveCharAt(self.cx, self.buffer_line()));
+                self.buffer.insert(self.cx, self.buffer_line(), *c);
+                self.cx += 1;
+            }
+            Action::RemoveCharAt(cx, line) => {
+                self.buffer.remove(*cx, *line);
+            }
+            Action::DeleteCharAtCursorPos => {
+                if self.line_length() > 0 {
+                    self.buffer.remove(self.cx, self.buffer_line());
+                }
+            }
+            Action::NewLine => {
+                self.cx = 0;
+                self.cy += 1u16;
+            }
+            Action::SetWaitingCmd(cmd) => {
+                self.waiting_command = Some(*cmd);
+            }
+            Action::DeleteCurrentLine => {
+                let line = self.buffer_line();
+                let contents = self.current_line_contents();
+
+                self.buffer.remove_line(self.buffer_line());
+                self.undo_action.push(Action::InsertLineAt(line, contents));
+            }
+            Action::Undo => {
+                if let Some(undo_action) = self.undo_action.pop() {
+                    self.execute(&undo_action);
+                };
+            }
+            Action::InsertLineAt(y, contents) => {
+                if let Some(contents) = contents {
+                    self.buffer.insert_line(*y, contents.to_string());
+                }
+            }
+            Action::MoveLineToViewportCenter => {
+                let viewport_center = self.vheight() / 2;
+                let distance_to_center = self.cy as isize - viewport_center as isize;
+
+                if distance_to_center > 0 {
+                    // if distance_to_center is negative, we need to move the scroll up
+                    let distance_to_center = distance_to_center.abs() as usize;
+                    if self.vtop > distance_to_center {
+                        let new_vtop = self.vtop + distance_to_center;
+                        self.vtop = new_vtop;
+                        self.cy = viewport_center;
+                    }
+                } else if distance_to_center < 0 {
+                    // if distance_to_center is negative, we need to move the scroll down
+                    let distance_to_center = distance_to_center.abs() as usize;
+                    let distance_to_go = self.vtop + distance_to_center;
+                    let new_vtop = self.vtop.saturating_sub(distance_to_center);
+                    if self.buffer.len() > distance_to_go && new_vtop != self.vtop {
+                        self.vtop = new_vtop;
+                        self.cy = viewport_center;
+                    }
+                }
+            }
+            Action::InsertLineAtCursor => {
+                self.undo_action
+                    .push(Action::DeleteLineAt(self.buffer_line()));
+                self.buffer.insert_line(self.buffer_line(), String::new());
+                self.mode = Mode::Insert;
+                self.cx = 0;
+            }
+            Action::InsertLineBelowCursor => {
+                self.undo_action
+                    .push(Action::DeleteLineAt(self.buffer_line() + 1));
+                self.buffer
+                    .insert_line(self.buffer_line() + 1, String::new());
+                self.cy += 1;
+                self.cx = 0;
+                self.mode = Mode::Insert;
+            }
+            Action::MoveToTop => {
+                self.vtop = 0;
+                self.cy = 0;
+            }
+            Action::MoveToBottom => {
+                if self.buffer.len() > self.vheight() as usize {
+                    self.vtop = self.buffer.len() - self.vheight() as usize;
+                    self.cy = self.vheight() - 1;
+                } else {
+                    self.cy = self.buffer.len() as u16 - 1u16;
+                }
+            }
+            Action::UndoMultiple(actions) => {
+                for action in actions.iter().rev() {
+                    self.execute(&action);
+                }
+            }
+            Action::DeleteLineAt(y) => {
+                self.buffer.remove_line(*y);
+            }
+        }
+
+        false
+    }
+}
+
+fn event_to_key_action(
+    mappings: &HashMap<String, KeyAction>,
+    ev: event::Event,
+) -> anyhow::Result<Option<KeyAction>> {
+    let action = match ev {
+        event::Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) => {
+            let key = match code {
+                // KeyCode::Char('q') => return Ok(Some(Action::Quit)),
+                KeyCode::Char(c) => format!("{c}"),
+                _ => format!("{code:?}"),
+            };
+
+            let key = match modifiers {
+                KeyModifiers::CONTROL => format!("Ctrl-{key}"),
+                KeyModifiers::ALT => format!("ALT-{key}"),
+                _ => key,
+            };
+
+            mappings.get(&key).cloned()
+        }
+        _ => None,
+    };
+
+    Ok(action)
 }
 
 fn determine_style_for_position(style_info: &Vec<StyleInfo>, pos: usize) -> Option<Style> {

@@ -1,0 +1,36 @@
+theme = "themes/dracula.json"
+
+[keys.normal]
+"G" = "MoveToBottom"
+"O" = "InsertLineAtCursor"
+"o" = "InsertLineBelowCursor"
+"u" = "Undo"
+"q" = "Quit"
+"p" = ["MoveUp", "MoveRight"]
+"h" = "MoveLeft"
+"j" = "MoveDown"
+"k" = "MoveUp"
+"l" = "MoveRight"
+"Left" = "MoveLeft"
+"Down" = "MoveDown"
+"Up" = "MoveUp"
+"Right" = "MoveRight"
+"0" = "MoveToLineStart" 
+"Home" = "MoveToLineStart" 
+"$" = "MoveToLineEnd"
+"End" = "MoveToLineEnd"
+"Ctrl-b" = "PageUp"
+"Ctrl-f" = "PageDown"
+"x" = "DeleteCharAtCursorPos"
+"d" = { "d" = "DeleteCurrentLine" } 
+"z" = { "z" = "MoveLineToViewportCenter" } 
+"g" = { "g" = "MoveToTop" } 
+
+[keys.normal.i]
+EnterMode = "Insert"
+
+[keys.insert]
+Enter = "NewLine"
+
+[keys.insert.Esc]
+EnterMode = "Normal"
