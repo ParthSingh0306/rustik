@@ -47,7 +47,7 @@ pub enum Action {
     NewLine,
 
     EnterMode(Mode),
-    SetWaitingCmd(char),
+    SetWaitingKeyAction(Box<KeyAction>),
     InsertLineAt(usize, Option<String>),
     MoveLineToViewportCenter,
     InsertLineAtCursor,
@@ -56,6 +56,7 @@ pub enum Action {
     MoveToTop,
     RemoveCharAt(u16, usize),
     UndoMultiple(Vec<Action>),
+    DeletePreviousChar,
 }
 
 impl Action {}
@@ -91,7 +92,7 @@ pub struct Editor {
     cy: u16,
     vx: u16,
     mode: Mode,
-    waiting_command: Option<char>,
+    waiting_key_action: Option<KeyAction>,
     undo_action: Vec<Action>,
     insert_undo_actions: Vec<Action>,
 }
@@ -127,7 +128,7 @@ impl Editor {
             vx,
             mode: Mode::Normal,
             size: terminal::size()?,
-            waiting_command: None,
+            waiting_key_action: None,
             undo_action: vec![],
             insert_undo_actions: vec![],
         })
@@ -158,7 +159,7 @@ impl Editor {
     }
 
     fn set_cursor_style(&mut self) -> anyhow::Result<()> {
-        self.stdout.queue(match self.waiting_command {
+        self.stdout.queue(match self.waiting_key_action {
             Some(_) => cursor::SetCursorStyle::SteadyUnderScore,
             _ => match self.mode {
                 Mode::Normal => cursor::SetCursorStyle::DefaultUserShape,
@@ -179,8 +180,6 @@ impl Editor {
         let mut colors = Vec::new();
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&query, tree.root_node(), code.as_bytes());
-
-        // let vbuffer = self.buffer.viewport(self.vtop, self.vheight() as usize);
 
         for mat in matches {
             for cap in mat.captures {
@@ -218,7 +217,6 @@ impl Editor {
         self.stdout
             .queue(cursor::MoveTo(x, y))?
             .queue(style::PrintStyledContent(styled_content))?;
-        // self.stdout.flush()?;
         Ok(())
     }
 
@@ -420,7 +418,7 @@ impl Editor {
 
             if let Event::Key(event) = read()? {
                 if event.kind == KeyEventKind::Press {
-                    if let Some(action) = self.handle_event(Event::Key(event))? {
+                    if let Some(action) = self.handle_event(Event::Key(event)) {
                         let quit = match action {
                             KeyAction::Single(action) => self.execute(&action),
                             KeyAction::Multiple(actions) => {
@@ -433,8 +431,8 @@ impl Editor {
                                 }
                                 quit
                             }
-                            KeyAction::Nested(_nested) => {
-                                // TODO: implement nested actions
+                            KeyAction::Nested(nested) => {
+                                self.waiting_key_action = Some(KeyAction::Nested(nested));
                                 false
                             }
                         };
@@ -450,10 +448,14 @@ impl Editor {
         Ok(())
     }
 
-    fn handle_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
+    fn handle_event(&mut self, ev: event::Event) -> Option<KeyAction> {
         if let event::Event::Resize(width, height) = ev {
             self.size = (width, height);
-            return Ok(None);
+            return None;
+        }
+
+        if let Some(ka) = self.waiting_key_action.take() {
+            return self.handle_waiting_command(ka, ev);
         }
 
         match self.mode {
@@ -462,44 +464,30 @@ impl Editor {
         }
     }
 
-    fn handle_insert_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
-        Ok(event_to_key_action(&self.config.keys.insert, ev)?)
-    }
+    fn handle_insert_event(&mut self, ev: event::Event) -> Option<KeyAction> {
+        if let Some(ka) = event_to_key_action(&self.config.keys.insert, &ev) {
+            return Some(ka);
+        }
 
-    fn handle_normal_event(&mut self, ev: event::Event) -> anyhow::Result<Option<KeyAction>> {
-        Ok(event_to_key_action(&self.config.keys.normal, ev)?)
-    }
-
-    fn handle_waiting_command(
-        &self,
-        cmd: char,
-        ev: event::Event,
-    ) -> anyhow::Result<Option<Action>> {
-        let action = match cmd {
-            'd' => match ev {
-                event::Event::Key(event) => match event.code {
-                    event::KeyCode::Char('d') => Some(Action::DeleteCurrentLine),
-                    _ => None,
-                },
-                _ => None,
-            },
-            'z' => match ev {
-                event::Event::Key(event) => match event.code {
-                    event::KeyCode::Char('z') => Some(Action::MoveLineToViewportCenter),
-                    _ => None,
-                },
-                _ => None,
-            },
-            'g' => match ev {
-                event::Event::Key(event) => match event.code {
-                    event::KeyCode::Char('g') => Some(Action::MoveToTop),
-                    _ => None,
-                },
+        match ev {
+            Event::Key(event) => match event.code {
+                KeyCode::Char(c) => KeyAction::Single(Action::InsertCharAtCursorPos(c)).into(),
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    fn handle_normal_event(&mut self, ev: event::Event) -> Option<KeyAction> {
+        event_to_key_action(&self.config.keys.normal, &ev)
+    }
+
+    fn handle_waiting_command(&mut self, ka: KeyAction, ev: event::Event) -> Option<KeyAction> {
+        let KeyAction::Nested(nested_mappings) = ka else {
+            panic!("Expected nested key action");
         };
-        Ok(action)
+
+        event_to_key_action(&nested_mappings, &ev)
     }
 
     fn current_line_contents(&self) -> Option<String> {
@@ -587,8 +575,8 @@ impl Editor {
                 self.cx = 0;
                 self.cy += 1u16;
             }
-            Action::SetWaitingCmd(cmd) => {
-                self.waiting_command = Some(*cmd);
+            Action::SetWaitingKeyAction(key_action) => {
+                self.waiting_key_action = Some(*(key_action.clone()));
             }
             Action::DeleteCurrentLine => {
                 let line = self.buffer_line();
@@ -634,7 +622,6 @@ impl Editor {
                 self.undo_action
                     .push(Action::DeleteLineAt(self.buffer_line()));
                 self.buffer.insert_line(self.buffer_line(), String::new());
-                self.mode = Mode::Insert;
                 self.cx = 0;
             }
             Action::InsertLineBelowCursor => {
@@ -644,7 +631,6 @@ impl Editor {
                     .insert_line(self.buffer_line() + 1, String::new());
                 self.cy += 1;
                 self.cx = 0;
-                self.mode = Mode::Insert;
             }
             Action::MoveToTop => {
                 self.vtop = 0;
@@ -666,17 +652,20 @@ impl Editor {
             Action::DeleteLineAt(y) => {
                 self.buffer.remove_line(*y);
             }
+            Action::DeletePreviousChar => {
+                if self.cx > 0 {
+                    self.cx -= 1;
+                    self.buffer.remove(self.cx, self.buffer_line());
+                }
+            }
         }
 
         false
     }
 }
 
-fn event_to_key_action(
-    mappings: &HashMap<String, KeyAction>,
-    ev: event::Event,
-) -> anyhow::Result<Option<KeyAction>> {
-    let action = match ev {
+fn event_to_key_action(mappings: &HashMap<String, KeyAction>, ev: &Event) -> Option<KeyAction> {
+    match ev {
         event::Event::Key(KeyEvent {
             code, modifiers, ..
         }) => {
@@ -686,7 +675,7 @@ fn event_to_key_action(
                 _ => format!("{code:?}"),
             };
 
-            let key = match modifiers {
+            let key = match *modifiers {
                 KeyModifiers::CONTROL => format!("Ctrl-{key}"),
                 KeyModifiers::ALT => format!("ALT-{key}"),
                 _ => key,
@@ -695,9 +684,7 @@ fn event_to_key_action(
             mappings.get(&key).cloned()
         }
         _ => None,
-    };
-
-    Ok(action)
+    }
 }
 
 fn determine_style_for_position(style_info: &Vec<StyleInfo>, pos: usize) -> Option<Style> {

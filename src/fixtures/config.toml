@@ -1,9 +1,9 @@
-theme = "themes/dracula.json"
+theme = "themes/mocha.json"
 
 [keys.normal]
 "G" = "MoveToBottom"
-"O" = "InsertLineAtCursor"
-"o" = "InsertLineBelowCursor"
+"O" = ["InsertLineAtCursor", { EnterMode = "Insert" } ]
+"o" = [ "InsertLineBelowCursor", { EnterMode = "Insert" } ]
 "u" = "Undo"
 "q" = "Quit"
 "p" = ["MoveUp", "MoveRight"]
@@ -25,12 +25,10 @@ theme = "themes/dracula.json"
 "d" = { "d" = "DeleteCurrentLine" } 
 "z" = { "z" = "MoveLineToViewportCenter" } 
 "g" = { "g" = "MoveToTop" } 
-
-[keys.normal.i]
-EnterMode = "Insert"
+"i" = { EnterMode = "Insert" }
 
 [keys.insert]
 Enter = "NewLine"
+Backspace = "DeletePreviousChar"
+Esc = { EnterMode = "Normal" }
 
-[keys.insert.Esc]
-EnterMode = "Normal"
