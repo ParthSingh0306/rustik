@@ -10,6 +10,7 @@ use once_cell::sync::OnceCell;
 mod buffer;
 mod config;
 mod editor;
+mod highlighter;
 mod logger;
 mod theme;
 
@@ -27,10 +28,10 @@ fn main() -> anyhow::Result<()> {
     let toml = fs::read_to_string("src/fixtures/config.toml")?;
     let config: Config = toml::from_str(&toml)?;
     let file = std::env::args().nth(1);
-    let buffer = Buffer::from_file(file);
+    let buffer = Buffer::from_file(file.clone());
 
     let theme = theme::parse_vscode_theme(&config.theme)?;
-    let mut editor = Editor::new(config, theme, buffer)?;
+    let mut editor = Editor::new(config, theme, buffer?)?;
 
     panic::set_hook(Box::new(|info| {
         _ = stdout().execute(terminal::LeaveAlternateScreen);
@@ -39,7 +40,6 @@ fn main() -> anyhow::Result<()> {
         eprintln!("{}", info);
     }));
 
-    let _ = editor.run();
-    editor.cleanup()?;
-    Ok(())
+    editor.run()?;
+    editor.cleanup()
 }

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{collections::HashMap, fs};
 
-use super::{Style, Theme, TokenStyle};
+use super::{StatuslineStyle, Style, Theme, TokenStyle};
 
 static SYNTAX_HIGHLIGHTING_MAP: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -75,6 +75,34 @@ pub fn parse_vscode_theme(file: &str) -> anyhow::Result<Theme> {
         ..Default::default()
     };
 
+    let statusline_style = StatuslineStyle {
+        outer_style: Style {
+            fg: Some(Color::Rgb { r: 0, g: 0, b: 0 }),
+            bg: Some(Color::Rgb {
+                r: 184,
+                g: 144,
+                b: 243,
+            }),
+            bold: true,
+            ..Default::default()
+        },
+        outer_chars: [' ', '', '', ' '],
+        inner_style: Style {
+            fg: Some(Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            }),
+            bg: Some(Color::Rgb {
+                r: 67,
+                g: 70,
+                b: 89,
+            }),
+            bold: true,
+            ..Default::default()
+        },
+    };
+
     Ok(Theme {
         name: vscode_theme.name.unwrap_or_default(),
         style: Style {
@@ -99,6 +127,7 @@ pub fn parse_vscode_theme(file: &str) -> anyhow::Result<Theme> {
         },
         token_styles,
         gutter_style,
+        statusline_style,
     })
 }
 
